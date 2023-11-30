@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+
+jobs:
+  Build:
+    name: Build and Test on JDK ${{ matrix.java }} and ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        java: [17]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write version vars
+        run: |
+          BUILD_DATE=`date -u +"%Y-%m-%dT%H:%M:%SZ"`
+          BRANCH=${GITHUB_REF_NAME#v}
+          APP_VERSION="0.1.0"
+          echo Version: $APP_VERSION
+          echo "VERSION=$APP_VERSION" >> $GITHUB_ENV
+          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
+          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+
+      - name: Build Container Image
+        id: build-image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: cloudtoo/audited-keycloak
+          tags: "end2end ${{ github.sha }}"
+          containerfiles: |
+            ./Dockerfile
+          build-args: |
+            BUILD_DATE=${{env.BUILD_DATE}}
+            APP_VERSION=${{env.APP_VERSION}}
+      - name: Login to GitHub Container Registry
+        run: |
+          echo ${{ secrets.CT_OCI_GITHUB_TOKEN }} | docker login ghcr.io -u CloudTooling --password-stdin
+
+      - name: Push GitHub Container Registry
+        id: push-to-ghcr-preview
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ steps.build-image.outputs.image }}
+          tags: 'next ${{env.APP_VERSION}}_rc'
+          registry: registry.hub.docker.com
+          username: continuoussecuritytooling
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+        if: github.ref == 'refs/heads/develop'
+
+      - name: Push To GitHub Container Registry
+        id: push-to-ghcr-tagged
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ steps.build-image.outputs.image }}
+          tags: 'latest ${{env.APP_VERSION}}'
+          registry: registry.hub.docker.com
+          username: continuoussecuritytooling
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+        if: github.ref_type == 'tag' || github.tag != ''
